@@ -1,223 +1,165 @@
+#include <RCSwitch.h>
+#include <U8g2lib.h>
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
 
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
+// U8g2 en modo página de 128 bytes (vs 1024 de Adafruit)
+U8G2_SSD1306_128X64_NONAME_2_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
-Adafruit_SSD1306 display(
-    SCREEN_WIDTH,
-    SCREEN_HEIGHT,
-    &Wire,
-    -1
-);
-
+RCSwitch sw433 = RCSwitch();
 
 const int PIN_RESET = 6;
-const int PIN_VBAT = A0;
+const int PIN_VBAT  = A0;
 
 unsigned long codigos[3] = {0, 0, 0};
-int indice = 0;
-String freqDetectada = "";
+int  indice        = 0;
+int  bitsDetectados = 0;
 bool esperandoReset = false;
-int bitsDetectados = 0;
+bool es433         = false;
+
+// -----------------------------------------------------------
 
 int medirBateria() {
   int raw = analogRead(PIN_VBAT);
   float vMedido = raw * (5.0 / 1023.0);
-  float vBat = vMedido * (10.0 + 4.7) / 4.7;
+  float vBat    = vMedido * (10.0 + 4.7) / 4.7;
   int pct = (int)((vBat - 6.5) / (8.4 - 6.5) * 100.0);
   return constrain(pct, 0, 100);
 }
 
-void dibujarBateria(int pct) {
-  display.drawRect(106, 0, 18, 8, SSD1306_WHITE);
-  display.fillRect(124, 2, 2, 4, SSD1306_WHITE);
+// Dibuja cabecera: batería + línea separadora
+// U8g2 trabaja dentro de firstPage/nextPage, no necesita clearDisplay
+void dibujarCabecera(int bat) {
+  // Texto batería
+  u8g2.setCursor(0, 8);
+  u8g2.print(F("BAT:"));
+  u8g2.print(bat);
+  u8g2.print('%');
 
-  int ancho = (int)(14.0 * pct / 100.0);
-
+  // Ícono batería (esquina superior derecha)
+  u8g2.drawFrame(106, 1, 18, 7);
+  u8g2.drawBox(124, 3, 2, 3);
+  int ancho = (int)(14.0 * bat / 100.0);
   if (ancho > 0)
-    display.fillRect(108, 2, ancho, 4, SSD1306_WHITE);
+    u8g2.drawBox(107, 2, ancho, 5);
+
+  // Línea separadora
+  u8g2.drawHLine(0, 11, 128);
 }
 
-void cabecera() {
-  int bat = medirBateria();
-
-  dibujarBateria(bat);
-
-  display.setCursor(0, 0);
-  display.print("BAT:");
-  display.print(bat);
-  display.print("%");
-
-  display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
-}
+// -----------------------------------------------------------
 
 void mostrarEspera() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-
-  cabecera();
-
-  display.setCursor(0, 14);
-  display.println("Apriete el control");
-
-  display.setCursor(0, 26);
-  display.println("del porton 3 veces");
-
-  display.setCursor(0, 42);
-  display.print("Detectados: ");
-  display.print(min(indice, 3));
-  display.print("/3");
-
-  display.setCursor(0, 54);
-  display.print("315, 433 MHz activo");
-
-  display.display();
+  int bat = medirBateria();
+  u8g2.firstPage();
+  do {
+    dibujarCabecera(bat);
+    u8g2.setCursor(0, 23);  u8g2.print(F("Apriete el control"));
+    u8g2.setCursor(0, 33);  u8g2.print(F("del porton 3 veces"));
+    u8g2.setCursor(0, 47);  u8g2.print(F("Detectados: "));
+                            u8g2.print(min(indice, 3));
+                            u8g2.print(F("/3"));
+    u8g2.setCursor(0, 57);  u8g2.print(F("433 MHz activo"));
+  } while (u8g2.nextPage());
 }
 
-void mostrarCompatible(unsigned long codigo, int protocolo, String freq) {
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-
-  cabecera();
-
-  display.setCursor(0, 13);
-  display.println("COMPATIBLE");
-
-  display.drawLine(0, 23, 128, 23, SSD1306_WHITE);
-
-  display.setCursor(0, 27);
-  display.print("Freq:");
-  display.print(freq);
-
-  display.setCursor(0, 36);
-  display.print("Proto:");
-  display.print(protocolo);
-
-  display.setCursor(0, 45);
-  display.print("Bits:");
-  display.print(bitsDetectados);
-
-  display.setCursor(0, 54);
-  display.print("Cod:");
-  display.print(codigo);
-
-  display.display();
+void mostrarCompatible(unsigned long codigo, int protocolo) {
+  int bat = medirBateria();
+  u8g2.firstPage();
+  do {
+    dibujarCabecera(bat);
+    u8g2.setCursor(0, 22);  u8g2.print(F("COMPATIBLE"));
+    u8g2.drawHLine(0, 24, 128);
+    u8g2.setCursor(0, 34);  u8g2.print(F("Freq:433.92 MHz"));
+    u8g2.setCursor(0, 43);  u8g2.print(F("Proto:")); u8g2.print(protocolo);
+    u8g2.setCursor(0, 52);  u8g2.print(F("Bits:"));  u8g2.print(bitsDetectados);
+    u8g2.setCursor(0, 61);  u8g2.print(F("Cod:"));   u8g2.print(codigo);
+  } while (u8g2.nextPage());
 }
 
-
-void mostrarIncompatible(int protocolo, String freq) {
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-
-  cabecera();
-
-  display.setCursor(0, 13);
-  display.println("NO COMPATIBLE");
-
-  display.drawLine(0, 23, 128, 23, SSD1306_WHITE);
-
-  display.setCursor(0, 27);
-  display.println("Rolling Code");
-
-  display.setCursor(0, 36);
-  display.print("Freq:");
-  display.print(freq);
-
-  display.setCursor(0, 45);
-  display.print("Proto:");
-  display.print(protocolo);
-
-  display.setCursor(0, 54);
-  display.print("Bits:");
-  display.print(bitsDetectados);
-
-  display.display();
+void mostrarIncompatible(int protocolo) {
+  int bat = medirBateria();
+  u8g2.firstPage();
+  do {
+    dibujarCabecera(bat);
+    u8g2.setCursor(0, 22);  u8g2.print(F("NO COMPATIBLE"));
+    u8g2.drawHLine(0, 24, 128);
+    u8g2.setCursor(0, 34);  u8g2.print(F("Rolling Code"));
+    u8g2.setCursor(0, 43);  u8g2.print(F("Freq:433.92 MHz"));
+    u8g2.setCursor(0, 52);  u8g2.print(F("Proto:")); u8g2.print(protocolo);
+    u8g2.setCursor(0, 61);  u8g2.print(F("Bits:"));  u8g2.print(bitsDetectados);
+  } while (u8g2.nextPage());
 }
+
+// -----------------------------------------------------------
 
 void resetearDetector() {
-  indice = 0;
-
-  codigos[0] = 0;
-  codigos[1] = 0;
-  codigos[2] = 0;
-
-  freqDetectada = "";
+  indice         = 0;
   bitsDetectados = 0;
   esperandoReset = false;
-
+  es433          = false;
+  codigos[0] = codigos[1] = codigos[2] = 0;
+  sw433.resetAvailable();
   mostrarEspera();
 }
 
 void procesarResultado(unsigned long codigo, int protocolo) {
-
-  bool esFijo =
-      (codigos[0] == codigos[1]) &&
-      (codigos[1] == codigos[2]);
-
   esperandoReset = true;
-
-  if (esFijo) {
-    Serial.println(">>> CODIGO FIJO - COMPATIBLE");
-    mostrarCompatible(codigo, protocolo, freqDetectada);
-  }
-  else {
-    Serial.println(">>> ROLLING CODE - NO COMPATIBLE");
-    mostrarIncompatible(protocolo, freqDetectada);
-  }
+  bool esFijo = (codigos[0] == codigos[1]) && (codigos[1] == codigos[2]);
+  if (esFijo)
+    mostrarCompatible(codigo, protocolo);
+  else
+    mostrarIncompatible(protocolo);
 }
 
+// -----------------------------------------------------------
+
 void setup() {
-
   Serial.begin(9600);
-
   pinMode(PIN_RESET, INPUT_PULLUP);
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("No se encontro la OLED");
-    while (1);
-  }
+  u8g2.begin();
+  u8g2.setFont(u8g2_font_6x10_tf);  // fuente pequeña, liviana
 
-  Serial.println("OLED listo");
+  // Pantalla de inicio
+  u8g2.firstPage();
+  do {
+    u8g2.setCursor(10, 20); u8g2.print(F("DETECTOR RF 433"));
+    u8g2.setCursor(20, 35); u8g2.print(F("v4.0 - Iniciando"));
+  } while (u8g2.nextPage());
 
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
+  delay(3000);
 
-  display.setCursor(10, 8);
-  display.println("DETECTOR RF 433/315");
-
-  display.setCursor(20, 24);
-  display.println("v4.0 - Iniciando");
-
-  display.display();
-
-  delay(1500);
+  sw433.enableReceive(0);  // INT0 = pin 2
 
   mostrarEspera();
 }
 
 void loop() {
-
+  // Botón reset con debounce
   if (digitalRead(PIN_RESET) == LOW) {
     delay(50);
-
     if (digitalRead(PIN_RESET) == LOW) {
-
       resetearDetector();
-
       while (digitalRead(PIN_RESET) == LOW);
     }
   }
 
-  if (esperandoReset)
-    return;
+  if (esperandoReset) return;
 
-  
+  if (sw433.available()) {
+    unsigned long cod = sw433.getReceivedValue();
+    int proto         = sw433.getReceivedProtocol();
+    bitsDetectados    = sw433.getReceivedBitlength();
+    sw433.resetAvailable();
+
+    if (cod == 0) return;
+
+    codigos[indice % 3] = cod;
+    indice++;
+
+    mostrarEspera();
+
+    if (indice >= 3)
+      procesarResultado(cod, proto);
+  }
 }
