@@ -19,6 +19,7 @@ unsigned long codigos[3] = {0, 0, 0};
 int indice = 0;
 String freqDetectada = "";
 bool esperandoReset = false;
+int bitsDetectados = 0;
 
 int medirBateria() {
   int raw = analogRead(PIN_VBAT);
@@ -76,35 +77,40 @@ void mostrarEspera() {
 }
 
 void mostrarCompatible(unsigned long codigo, int protocolo, String freq) {
+
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
 
   cabecera();
 
-  display.setTextSize(2);
   display.setCursor(0, 13);
   display.println("COMPATIBLE");
 
-  display.setTextSize(1);
+  display.drawLine(0, 23, 128, 23, SSD1306_WHITE);
 
-  display.drawLine(0, 33, 128, 33, SSD1306_WHITE);
-
-  display.setCursor(0, 37);
-  display.print("Freq: ");
+  display.setCursor(0, 27);
+  display.print("Freq:");
   display.print(freq);
 
-  display.setCursor(0, 48);
-  display.print("Proto: ");
+  display.setCursor(0, 36);
+  display.print("Proto:");
   display.print(protocolo);
 
-  display.setCursor(0, 57);
-  display.print("Puls. RESET p/nuevo");
+  display.setCursor(0, 45);
+  display.print("Bits:");
+  display.print(bitsDetectados);
+
+  display.setCursor(0, 54);
+  display.print("Cod:");
+  display.print(codigo);
 
   display.display();
 }
 
+
 void mostrarIncompatible(int protocolo, String freq) {
+
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -117,17 +123,19 @@ void mostrarIncompatible(int protocolo, String freq) {
   display.drawLine(0, 23, 128, 23, SSD1306_WHITE);
 
   display.setCursor(0, 27);
-  display.println("Rolling Code detectado");
+  display.println("Rolling Code");
 
-  display.setCursor(0, 39);
-  display.print("Freq: ");
+  display.setCursor(0, 36);
+  display.print("Freq:");
   display.print(freq);
 
-  display.setCursor(0, 50);
-  display.println("RS400 no funciona.");
+  display.setCursor(0, 45);
+  display.print("Proto:");
+  display.print(protocolo);
 
-  display.setCursor(0, 58);
-  display.print("Puls. RESET p/nuevo");
+  display.setCursor(0, 54);
+  display.print("Bits:");
+  display.print(bitsDetectados);
 
   display.display();
 }
@@ -140,7 +148,8 @@ void resetearDetector() {
   codigos[2] = 0;
 
   freqDetectada = "";
-  esperandoReset = false;
+bitsDetectados = 0;
+esperandoReset = false;
 
   sw433.resetAvailable();
   sw315.resetAvailable();
@@ -218,6 +227,7 @@ void loop() {
 
     unsigned long cod = sw433.getReceivedValue();
     int proto = sw433.getReceivedProtocol();
+bitsDetectados = sw433.getReceivedBitlength();
 
     sw433.resetAvailable();
 
@@ -247,6 +257,7 @@ void loop() {
 
     unsigned long cod = sw315.getReceivedValue();
     int proto = sw315.getReceivedProtocol();
+bitsDetectados = sw315.getReceivedBitlength();
 
     sw315.resetAvailable();
 
