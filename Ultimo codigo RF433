@@ -1,0 +1,230 @@
+#include <RCSwitch.h>
+#include <U8g2lib.h>
+#include <Wire.h>
+
+// U8g2 en modo página de 128 bytes (vs 1024 de Adafruit)
+U8G2_SSD1306_128X64_NONAME_2_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+
+RCSwitch sw433 = RCSwitch();
+
+const int PIN_RESET = 6;
+const int PIN_VBAT  = A0;
+const int PIN_RAW   = 3;   // INT1 - MISMO dato del receptor 433, en paralelo con el pin 2
+
+unsigned long codigos[3] = {0, 0, 0};
+int  indice        = 0;
+int  bitsDetectados = 0;
+bool esperandoReset = false;
+bool es433         = false;
+
+// ===================== Captura cruda de pulsos =====================
+// RCSwitch solo reconoce protocolos de codigo fijo (PT2262/EV1527 y similares).
+// Controles "rolling code" (ej. Starligh) usan otra codificacion y RCSwitch
+// jamas dispara sw433.available(). Esta segunda via captura CUALQUIER rafaga
+// de pulsos en el pin D3 (cableado en paralelo al mismo DATA del receptor),
+// sin asumir ningun protocolo, para que siempre se vea algo en pantalla.
+
+// NOTA: no se guarda cada pulso en un array (eso costaba ~800 bytes de RAM,
+// el Nano solo tiene 2048). El hash se va calculando pulso a pulso, dentro
+// mismo de la interrupcion, y solo se guardan 2 numeros sueltos.
+volatile unsigned long rawHashAcc      = 2166136261UL; // hash en construccion
+volatile unsigned int  rawCantidadAcc  = 0;             // pulsos contados en la trama actual
+volatile unsigned long rawUltimoFlanco = 0;
+
+volatile unsigned long rawHashSnap     = 0;  // hash final de la ultima trama cerrada
+volatile unsigned int  rawCantidadSnap = 0;
+volatile bool          rawTransmisionLista = false;
+
+void ISR_raw() {
+  unsigned long ahora = micros();
+  unsigned long duracion = ahora - rawUltimoFlanco;
+  rawUltimoFlanco = ahora;
+
+  // Hueco largo entre flancos (>4ms) = silencio entre repeticiones -> cierra la trama
+  if (duracion > 4000) {
+    if (rawCantidadAcc > 16 && !rawTransmisionLista) {
+      rawHashSnap     = rawHashAcc;
+      rawCantidadSnap = rawCantidadAcc;
+      rawTransmisionLista = true;   // el loop() debe leerla y bajar el flag
+    }
+    rawHashAcc     = 2166136261UL;
+    rawCantidadAcc = 0;
+    return;
+  }
+
+  // Agrupa la duracion en bloques de 50us (tolera el jitter tipico de estos
+  // receptores baratos) y la mezcla en el hash sobre la marcha.
+  unsigned int bucket = (unsigned int)(duracion / 50);
+  rawHashAcc ^= bucket;
+  rawHashAcc *= 16777619UL;
+  if (rawCantidadAcc < 60000) rawCantidadAcc++;
+}
+
+// -----------------------------------------------------------
+
+int medirBateria() {
+  int raw = analogRead(PIN_VBAT);
+  float vMedido = raw * (5.0 / 1023.0);
+  float vBat    = vMedido * (10.0 + 4.7) / 4.7;
+  int pct = (int)((vBat - 6.5) / (8.4 - 6.5) * 100.0);
+  return constrain(pct, 0, 100);
+}
+
+// Dibuja cabecera: batería + línea separadora
+void dibujarCabecera(int bat) {
+  u8g2.setCursor(0, 8);
+  u8g2.print(F("BAT:"));
+  u8g2.print(bat);
+  u8g2.print('%');
+
+  u8g2.drawFrame(106, 1, 18, 7);
+  u8g2.drawBox(124, 3, 2, 3);
+  int ancho = (int)(14.0 * bat / 100.0);
+  if (ancho > 0)
+    u8g2.drawBox(107, 2, ancho, 5);
+
+  u8g2.drawHLine(0, 11, 128);
+}
+
+// -----------------------------------------------------------
+
+void mostrarEspera() {
+  int bat = medirBateria();
+  u8g2.firstPage();
+  do {
+    dibujarCabecera(bat);
+    u8g2.setCursor(0, 23);  u8g2.print(F("Apriete el control"));
+    u8g2.setCursor(0, 33);  u8g2.print(F("del porton 3 veces"));
+    u8g2.setCursor(0, 47);  u8g2.print(F("Detectados: "));
+                            u8g2.print(min(indice, 3));
+                            u8g2.print(F("/3"));
+    u8g2.setCursor(0, 57);  u8g2.print(F("433 MHz activo"));
+  } while (u8g2.nextPage());
+}
+
+void mostrarCompatible(unsigned long codigo, int protocolo) {
+  int bat = medirBateria();
+  u8g2.firstPage();
+  do {
+    dibujarCabecera(bat);
+    u8g2.setCursor(0, 22);  u8g2.print(F("COMPATIBLE"));
+    u8g2.drawHLine(0, 24, 128);
+    u8g2.setCursor(0, 34);  u8g2.print(F("Freq:433.92 MHz"));
+    u8g2.setCursor(0, 43);  u8g2.print(F("Proto:"));
+                            if (protocolo == -1) u8g2.print(F("No std"));
+                            else                 u8g2.print(protocolo);
+    u8g2.setCursor(0, 52);  u8g2.print(F("Bits:"));  u8g2.print(bitsDetectados);
+    u8g2.setCursor(0, 61);  u8g2.print(F("Cod:"));   u8g2.print(codigo);
+  } while (u8g2.nextPage());
+}
+
+void mostrarIncompatible(int protocolo) {
+  int bat = medirBateria();
+  u8g2.firstPage();
+  do {
+    dibujarCabecera(bat);
+    u8g2.setCursor(0, 22);  u8g2.print(F("NO COMPATIBLE"));
+    u8g2.drawHLine(0, 24, 128);
+    u8g2.setCursor(0, 34);  u8g2.print(F("Rolling Code"));
+    u8g2.setCursor(0, 43);  u8g2.print(F("Freq:433.92 MHz"));
+    u8g2.setCursor(0, 52);  u8g2.print(F("Proto:"));
+                            if (protocolo == -1) u8g2.print(F("No std"));
+                            else                 u8g2.print(protocolo);
+    u8g2.setCursor(0, 61);  u8g2.print(F("Bits:"));  u8g2.print(bitsDetectados);
+  } while (u8g2.nextPage());
+}
+
+// -----------------------------------------------------------
+
+void resetearDetector() {
+  indice         = 0;
+  bitsDetectados = 0;
+  esperandoReset = false;
+  es433          = false;
+  codigos[0] = codigos[1] = codigos[2] = 0;
+  sw433.resetAvailable();
+
+  noInterrupts();
+  rawCantidadAcc = 0;
+  rawTransmisionLista = false;
+  interrupts();
+
+  mostrarEspera();
+}
+
+void registrarDeteccion(unsigned long cod, int protocolo) {
+  codigos[indice % 3] = cod;
+  indice++;
+
+  mostrarEspera();
+
+  if (indice >= 3) {
+    esperandoReset = true;
+    bool esFijo = (codigos[0] == codigos[1]) && (codigos[1] == codigos[2]);
+    if (esFijo)
+      mostrarCompatible(cod, protocolo);
+    else
+      mostrarIncompatible(protocolo);
+  }
+}
+
+// -----------------------------------------------------------
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(PIN_RESET, INPUT_PULLUP);
+  pinMode(PIN_RAW, INPUT);
+
+  u8g2.begin();
+  u8g2.setFont(u8g2_font_6x10_tf);
+
+  u8g2.firstPage();
+  do {
+    u8g2.setCursor(10, 20); u8g2.print(F("DETECTOR RF 433"));
+    u8g2.setCursor(20, 35); u8g2.print(F("v4.1 - Iniciando"));
+  } while (u8g2.nextPage());
+
+  delay(3000);
+
+  sw433.enableReceive(0);  // INT0 = pin 2: protocolos conocidos (PT22xx y similares)
+  attachInterrupt(digitalPinToInterrupt(PIN_RAW), ISR_raw, CHANGE); // INT1 = pin 3: captura cruda
+
+  mostrarEspera();
+}
+
+void loop() {
+  // Botón reset con debounce
+  if (digitalRead(PIN_RESET) == LOW) {
+    delay(50);
+    if (digitalRead(PIN_RESET) == LOW) {
+      resetearDetector();
+      while (digitalRead(PIN_RESET) == LOW);
+    }
+  }
+
+  if (esperandoReset) return;
+
+  // 1) Protocolos conocidos (controles de codigo fijo tipo PT2262/EV1527, etc.)
+  if (sw433.available()) {
+    unsigned long cod = sw433.getReceivedValue();
+    int proto         = sw433.getReceivedProtocol();
+    bitsDetectados    = sw433.getReceivedBitlength();
+    sw433.resetAvailable();
+
+    if (cod == 0) return;
+
+    registrarDeteccion(cod, proto);
+    return;
+  }
+
+  // 2) Protocolos que RCSwitch NO reconoce (tipico de rolling code, ej. Starligh)
+  if (rawTransmisionLista) {
+    noInterrupts();
+    unsigned long huella = rawHashSnap;
+    bitsDetectados = rawCantidadSnap;
+    rawTransmisionLista = false;
+    interrupts();
+
+    registrarDeteccion(huella, -1);  // protocolo -1 = "no estandar" / capturado crudo
+  }
+}
