@@ -120,6 +120,16 @@ void mostrarEspera() {
   } while (u8g2.nextPage());
 }
 
+void mostrarTramaInvalida() {
+  int bat = medirBateria();
+  u8g2.firstPage();
+  do {
+    dibujarCabecera(bat);
+    u8g2.setCursor(0, 35); u8g2.print(F("Senal invalida,"));
+    u8g2.setCursor(0, 45); u8g2.print(F("intente de nuevo"));
+  } while (u8g2.nextPage());
+}
+
 void mostrarCompatible(unsigned int pulsos) {
   int bat = medirBateria();
   u8g2.firstPage();
@@ -205,7 +215,16 @@ void registrarDeteccion(unsigned long huella, unsigned int pulsos) {
   bool pulsosOK = pulsosSimilares(pulsosCapturados[0], pulsosCapturados[1]) &&
                   pulsosSimilares(pulsosCapturados[1], pulsosCapturados[2]);
 
-  if (!pulsosOK) return; // ruido, ignorar sin cambiar pantalla
+  if (!pulsosOK) {
+    // Trama ruidosa: ignorar y volver a comenzar
+    indice = 0;
+    pulsosCapturados[0] = pulsosCapturados[1] = pulsosCapturados[2] = 0;
+    hashesCapturados[0] = hashesCapturados[1] = hashesCapturados[2] = 0;
+    mostrarTramaInvalida();
+    delay(1500);
+    mostrarEspera();
+    return;
+  }
 
   bool hashesIguales = (hashesCapturados[0] == hashesCapturados[1]) &&
                       (hashesCapturados[1] == hashesCapturados[2]);
