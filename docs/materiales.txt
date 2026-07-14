@@ -1,0 +1,10 @@
+- Arduino Nano
+- Modulo receptor 433,92MHz
+- Pantalla Oled 0,96” 128x64
+- Bateria 9V recargable
+- Modulo step down
+- Switch ON/OF
+- Pulsador NA
+- Resistencias 10k y 4,7k
+- Caja plastica
+- PCB perforada
