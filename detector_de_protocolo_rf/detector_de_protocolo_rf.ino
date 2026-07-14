@@ -190,6 +190,8 @@ void setup()
     u8g2.print(F("433 MHz"));
   } while (u8g2.nextPage());
 
+  delay(2500);
+  u8g2.setFont(u8g2_font_6x10_tf);
   sw433.enableReceive(0);
   mostrarEspera();
 }
