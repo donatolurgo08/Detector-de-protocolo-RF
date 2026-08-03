@@ -23,10 +23,12 @@ Dispositivo portátil para analizar señales de radiofrecuencia a 433MHz. Permit
 
 El dispositivo escucha señales en la frecuencia de **433.92MHz** a través de un receptor RF. Cuando detecta una transmisión, captura el **código**, el **protocolo** y la **cantidad de bits** de cada paquete recibido.
 
-El proceso requiere **3 pulsaciones del control a analizar**. Con esas 3 capturas compara si los datos son idénticos entre sí:
+El proceso requiere **al menos 3 pulsaciones del control a analizar** (con reintento automático hasta 5 si las muestras no coinciden por ruido). Con esas capturas compara si los datos son idénticos entre sí:
 
-- **Código fijo:** los 3 paquetes son iguales → el control es clonable ✅
+- **Código fijo:** al menos 3 paquetes iguales → el control es clonable ✅
 - **Rolling code:** los paquetes cambian en cada pulsación → el control no es clonable ❌
+
+Además verifica el **bitrate** de la señal (500–700 baud): si el control trabaja fuera de ese rango muestra `BITRATE NO SOPORTADO` y no lo cuenta como pulsación.
 
 Toda la información se visualiza en la pantalla OLED integrada.
 
@@ -36,8 +38,8 @@ Toda la información se visualiza en la pantalla OLED integrada.
 
 1. Encendido: Deslizar el interruptor lateral. La pantalla mostrará el logo y luego la pantalla de espera.
 2. Apuntar el control remoto al dispositivo y presionar **3 veces** (o mantener).
-3. La pantalla irá mostrando cuántas pulsaciones fueron detectadas.
-4. Al completar las 3, se muestra el resultado:
+3. La pantalla irá mostrando cuántas pulsaciones fueron detectadas. Si las muestras no coinciden aparece `No coinciden, repita`: apretar 1–2 veces más.
+4. Al completar las capturas, se muestra el resultado:
 
 | Pantalla          | Significado                |
 | ----------------- | -------------------------- |

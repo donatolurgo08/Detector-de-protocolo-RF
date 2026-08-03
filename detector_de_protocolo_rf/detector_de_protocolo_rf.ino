@@ -11,17 +11,31 @@ RCSwitch sw433 = RCSwitch();
 const int PIN_RESET = 6;
 const int PIN_VBAT = A0;
 
+// ---- Constantes de detección ----
+const int MAX_CAPTURAS = 5;     // máximo de capturas antes de decidir
+const int MIN_IGUALES = 3;      // mínimo de tramas iguales para dar COMPATIBLE
+const int BAUD_MIN = 500;       // ventana de bitrate soportada (baud)
+const int BAUD_MAX = 700;
+const int RECEIVE_TOLERANCE = 50;  // % de tolerancia de RCSwitch (default 60)
+
+// Multiplicador para pasar de pulso (µs) a bitrate: cantidad de pulsos por bit
+// según el protocolo de RCSwitch (índice = protocolo - 1)
+static const uint8_t PROGMEM MULT_POR_PROTOCOLO[] = { 4, 3, 15, 4, 3, 3, 7, 23, 23, 4, 3, 3 };
+
 // ---- Struct de paquete ----
 struct Paquete
 {
   unsigned long codigo;
   int protocolo;
   int bits;
+  int pulso;
 };
 
-Paquete capturas[3];
+Paquete capturas[MAX_CAPTURAS];
 int indice = 0;
 bool esperandoReset = false;
+bool reintentando = false;
+unsigned long ultimoAvisoBitrate = 0;
 
 // -----------------------------------------------------------
 
@@ -32,6 +46,16 @@ int medirBateria()
   float vBat = vMedido * (10.0 + 4.7) / 4.7;
   int pct = (int)((vBat - 6.5) / (8.4 - 6.5) * 100.0);
   return constrain(pct, 0, 100);
+}
+
+// Bitrate (baud) a partir del pulso medido por RCSwitch y el protocolo.
+// baud = 1e6 / (pulsosPorBit * pulsoUs)
+int calcularBaud(int pulsoUs, int protocolo)
+{
+  if (protocolo < 1 || protocolo > 12)
+    return 0;
+  uint8_t mult = pgm_read_byte(&MULT_POR_PROTOCOLO[protocolo - 1]);
+  return (int)(1000000L / ((long)mult * pulsoUs));
 }
 
 // Dibuja cabecera: batería + línea separadora
@@ -70,10 +94,21 @@ void mostrarEspera()
     u8g2.print(F("del porton 3 veces"));
     u8g2.setCursor(0, 47);
     u8g2.print(F("Detectados: "));
-    u8g2.print(min(indice, 3));
-    u8g2.print(F("/3"));
+    if (reintentando)
+    {
+      u8g2.print(indice);
+      u8g2.print(F("/5"));
+    }
+    else
+    {
+      u8g2.print(min(indice, 3));
+      u8g2.print(F("/3"));
+    }
     u8g2.setCursor(0, 57);
-    u8g2.print(F("433 MHz activo"));
+    if (reintentando)
+      u8g2.print(F("No coinciden, repita"));
+    else
+      u8g2.print(F("433 MHz activo"));
   } while (u8g2.nextPage());
 }
 
@@ -88,7 +123,8 @@ void mostrarCompatible(Paquete &p)
     u8g2.print(F("COMPATIBLE"));
     u8g2.drawHLine(0, 24, 128);
     u8g2.setCursor(0, 34);
-    u8g2.print(F("Freq:433.92 MHz"));
+    u8g2.print(F("Baud:"));
+    u8g2.print(calcularBaud(p.pulso, p.protocolo));
     u8g2.setCursor(0, 43);
     u8g2.print(F("Proto:"));
     u8g2.print(p.protocolo);
@@ -114,7 +150,8 @@ void mostrarIncompatible(Paquete &p)
     u8g2.setCursor(0, 34);
     u8g2.print(F("Rolling Code"));
     u8g2.setCursor(0, 43);
-    u8g2.print(F("Freq:433.92 MHz"));
+    u8g2.print(F("Baud:"));
+    u8g2.print(calcularBaud(p.pulso, p.protocolo));
     u8g2.setCursor(0, 52);
     u8g2.print(F("Proto:"));
     u8g2.print(p.protocolo);
@@ -124,39 +161,90 @@ void mostrarIncompatible(Paquete &p)
   } while (u8g2.nextPage());
 }
 
+void mostrarBitrateNoSoportado(int baud, int pulso)
+{
+  int bat = medirBateria();
+  u8g2.firstPage();
+  do
+  {
+    dibujarCabecera(bat);
+    u8g2.setCursor(0, 22);
+    u8g2.print(F("BITRATE NO SOPORTADO"));
+    u8g2.drawHLine(0, 24, 128);
+    u8g2.setCursor(0, 34);
+    u8g2.print(F("Baud:"));
+    u8g2.print(baud);
+    u8g2.setCursor(0, 43);
+    u8g2.print(F("Pulso:"));
+    u8g2.print(pulso);
+    u8g2.print(F(" us"));
+    u8g2.setCursor(0, 52);
+    u8g2.print(F("Solo 500-700 baud"));
+  } while (u8g2.nextPage());
+  delay(2500);
+  mostrarEspera();
+}
+
 // -----------------------------------------------------------
 
 void resetearDetector()
 {
   indice = 0;
   esperandoReset = false;
-  for (int i = 0; i < 3; i++)
-    capturas[i] = {0, 0, 0};
+  reintentando = false;
+  ultimoAvisoBitrate = 0;
+  for (int i = 0; i < MAX_CAPTURAS; i++)
+    capturas[i] = {0, 0, 0, 0};
   sw433.resetAvailable();
   mostrarEspera();
 }
 
-bool paquetesIguales(Paquete &a, Paquete &b)
+// Comparación tolerante: tolera un bit de diferencia (glitches del receptor).
+// - Bits iguales: el código debe coincidir.
+// - Bits difieren en 1: coincide si el código es idéntico (glitch al final en
+//   protocolos invertidos) o si coincide al descartar el bit espurio (codigo>>1).
+bool mismaTrama(Paquete &a, Paquete &b)
 {
-  return (a.codigo == b.codigo) &&
-         (a.protocolo == b.protocolo) &&
-         (a.bits == b.bits);
+  if (a.protocolo != b.protocolo)
+    return false;
+  int diffBits = abs(a.bits - b.bits);
+  if (diffBits > 1)
+    return false;
+  if (diffBits == 0)
+    return a.codigo == b.codigo;
+  if (a.bits > b.bits)
+    return (a.codigo == b.codigo) || ((a.codigo >> 1) == b.codigo);
+  return (a.codigo == b.codigo) || ((b.codigo >> 1) == a.codigo);
 }
 
-void procesarResultado()
+// Busca la trama que se repite al menos MIN_IGUALES veces (mayoría de votos).
+bool obtenerMayoria(Paquete &ganador)
+{
+  for (int i = 0; i < indice; i++)
+  {
+    int cont = 0;
+    for (int j = 0; j < indice; j++)
+    {
+      if (mismaTrama(capturas[i], capturas[j]))
+        cont++;
+    }
+    if (cont >= MIN_IGUALES)
+    {
+      ganador = capturas[i];
+      return true;
+    }
+  }
+  return false;
+}
+
+void procesarResultado(Paquete &ganador, bool esFijo)
 {
   esperandoReset = true;
 
-  bool esFijo = paquetesIguales(capturas[0], capturas[1]) &&
-                paquetesIguales(capturas[1], capturas[2]);
-
-  // El último paquete capturado es capturas[(indice-1) % 3]
-  Paquete &ultimo = capturas[(indice - 1) % 3];
-
   if (esFijo)
-    mostrarCompatible(ultimo);
+    mostrarCompatible(ganador);
   else
-    mostrarIncompatible(ultimo);
+    mostrarIncompatible(ganador);
 }
 
 // -----------------------------------------------------------
@@ -192,6 +280,7 @@ void setup()
 
   delay(2500);
   u8g2.setFont(u8g2_font_6x10_tf);
+  sw433.setReceiveTolerance(RECEIVE_TOLERANCE);
   sw433.enableReceive(0);
   mostrarEspera();
 }
@@ -218,26 +307,56 @@ void loop()
     unsigned long cod = sw433.getReceivedValue();
     int proto = sw433.getReceivedProtocol();
     int bits = sw433.getReceivedBitlength();
+    int pulso = sw433.getReceivedDelay();
     sw433.resetAvailable();
 
     if (cod == 0)
       return;
 
-    capturas[indice % 3] = {cod, proto, bits};
-    indice++;
+    int baud = calcularBaud(pulso, proto);
 
     Serial.print(F("["));
-    Serial.print(indice);
+    Serial.print(indice + 1);
     Serial.print(F("] cod:"));
     Serial.print(cod);
     Serial.print(F(" proto:"));
     Serial.print(proto);
     Serial.print(F(" bits:"));
-    Serial.println(bits);
+    Serial.print(bits);
+    Serial.print(F(" pulso:"));
+    Serial.print(pulso);
+    Serial.print(F(" baud:"));
+    Serial.println(baud);
+
+    if (baud < BAUD_MIN || baud > BAUD_MAX)
+    {
+      if (millis() - ultimoAvisoBitrate > 3000)
+      {
+        ultimoAvisoBitrate = millis();
+        mostrarBitrateNoSoportado(baud, pulso);
+      }
+      return;
+    }
+
+    capturas[indice] = {cod, proto, bits, pulso};
+    indice++;
+
+    if (indice >= MIN_IGUALES)
+    {
+      Paquete ganador;
+      if (obtenerMayoria(ganador))
+      {
+        procesarResultado(ganador, true);
+        return;
+      }
+      if (indice >= MAX_CAPTURAS)
+      {
+        procesarResultado(capturas[indice - 1], false);
+        return;
+      }
+      reintentando = true;
+    }
 
     mostrarEspera();
-
-    if (indice >= 3)
-      procesarResultado();
   }
 }
