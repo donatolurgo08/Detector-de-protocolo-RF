@@ -20,6 +20,8 @@ const int BAUD_MIN = 500;       // ventana de bitrate soportada (baud)
 const int BAUD_MAX = 700;
 const int RECEIVE_TOLERANCE = 50;  // % de tolerancia de RCSwitch (default 60)
 const unsigned long TIMEOUT_SLEEP = 120000UL;  // autoapagado por inactividad (2 min)
+const int BATERIA_BAJA = 15;              // umbral de aviso de batería baja (%)
+const unsigned long INTERVALO_BATERIA = 1000UL;  // re-medir batería cada 1 s
 
 // Multiplicador para pasar de pulso (µs) a bitrate: cantidad de pulsos por bit
 // según el protocolo de RCSwitch (índice = protocolo - 1)
@@ -40,16 +42,45 @@ bool esperandoReset = false;
 bool reintentando = false;
 unsigned long ultimoAvisoBitrate = 0;
 unsigned long ultimaActividad = 0;
+unsigned long ultimaMedicionBateria = 0;
+int bateriaCached = -1;   // -1 = aún sin medir
 
 // -----------------------------------------------------------
 
+// Mide VCC en mV usando el bandgap interno de 1.1V como referencia.
+// Así la lectura de batería no depende de que VCC sea exactamente 5V.
+long leerVcc()
+{
+  ADMUX = (1 << REFS0) | (1 << MUX3) | (1 << MUX2) | (1 << MUX1);
+  delay(2);
+  ADCSRA |= (1 << ADSC);
+  while (bit_is_set(ADCSRA, ADSC))
+    ;
+  uint8_t bajo = ADCL;
+  uint8_t alto = ADCH;
+  return 1125300L / ((alto << 8) | bajo);
+}
+
+// Porcentaje de batería: promedio de lecturas, con caché de 1 s.
+// pct = (vBat - 6.5V) / (8.4V - 6.5V) * 100, con divisor 10k/4.7k.
 int medirBateria()
 {
-  int raw = analogRead(PIN_VBAT);
-  float vMedido = raw * (5.0 / 1023.0);
-  float vBat = vMedido * (10.0 + 4.7) / 4.7;
-  int pct = (int)((vBat - 6.5) / (8.4 - 6.5) * 100.0);
-  return constrain(pct, 0, 100);
+  if (millis() - ultimaMedicionBateria < INTERVALO_BATERIA && bateriaCached >= 0)
+    return bateriaCached;
+  ultimaMedicionBateria = millis();
+
+  long suma = 0;
+  for (int i = 0; i < 8; i++)
+    suma += analogRead(PIN_VBAT);
+  int raw = (int)(suma / 8);
+
+  long vcc = leerVcc();                          // mV
+  long vBat = raw * vcc * 147L / (1023L * 47L);  // divisor 10k/4.7k
+  long pct = (vBat - 6500L) * 100L / (8400L - 6500L);
+  pct = constrain(pct, 0, 100);
+
+  bateriaCached = (int)pct;
+  return bateriaCached;
 }
 
 // Bitrate (baud) a partir del pulso medido por RCSwitch y el protocolo.
@@ -68,18 +99,27 @@ int calcularBaud(int pulsoUs, int protocolo)
 // U8g2 trabaja dentro de firstPage/nextPage, no necesita clearDisplay
 void dibujarCabecera(int bat)
 {
+  bool bateriaBaja = (bat < BATERIA_BAJA);
+  // En batería baja el ícono parpadea (se dibuja solo en el medio ciclo par)
+  bool iconoVisible = !bateriaBaja || ((millis() / 500) % 2 == 0);
+
   // Texto batería
   u8g2.setCursor(0, 8);
   u8g2.print(F("BAT:"));
   u8g2.print(bat);
   u8g2.print('%');
+  if (bateriaBaja)
+    u8g2.print('!');
 
   // Ícono batería (esquina superior derecha)
   u8g2.drawFrame(106, 1, 18, 7);
   u8g2.drawBox(124, 3, 2, 3);
-  int ancho = (int)(14.0 * bat / 100.0);
-  if (ancho > 0)
-    u8g2.drawBox(107, 2, ancho, 5);
+  if (iconoVisible)
+  {
+    int ancho = (int)(14.0 * bat / 100.0);
+    if (ancho > 0)
+      u8g2.drawBox(107, 2, ancho, 5);
+  }
 
   // Línea separadora
   u8g2.drawHLine(0, 11, 128);
@@ -316,8 +356,9 @@ void irASleep()
   EIFR |= (1 << INTF0);   // limpiar flag pendiente de INT0 antes de reactivar
   sw433.enableReceive(0);
 
-  // Reiniciar a la pantalla de espera
+  // Reiniciar a la pantalla de espera (re-mide la batería al despertar)
   ultimaActividad = millis();
+  ultimaMedicionBateria = 0;
   resetearDetector();
 }
 
