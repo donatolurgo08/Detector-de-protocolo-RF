@@ -246,6 +246,7 @@ void resetearDetector()
 }
 
 // Comparación tolerante: tolera un bit de diferencia (glitches del receptor).
+// - El pulso (µs) debe ser similar: mismo control => mismo ritmo de transmisión.
 // - Bits iguales: el código debe coincidir.
 // - Bits difieren en 1: coincide si el código es idéntico (glitch al final en
 //   protocolos invertidos) o si coincide al descartar el bit espurio (codigo>>1).
@@ -253,6 +254,12 @@ bool mismaTrama(Paquete &a, Paquete &b)
 {
   if (a.protocolo != b.protocolo)
     return false;
+
+  // Pulso similar (tolerancia 20% + 40us de piso por jitter de la medición)
+  long diffPulso = abs((long)a.pulso - b.pulso);
+  if (diffPulso > (long)a.pulso * 20 / 100 + 40)
+    return false;
+
   int diffBits = abs(a.bits - b.bits);
   if (diffBits > 1)
     return false;
