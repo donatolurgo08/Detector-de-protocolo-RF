@@ -2,6 +2,7 @@
 #include <U8g2lib.h>
 #include <Wire.h>
 #include <avr/sleep.h>
+#include <avr/wdt.h>
 #include "logo_bitech.h"
 
 // U8g2 en modo página de 128 bytes (vs 1024 de Adafruit)
@@ -57,6 +58,8 @@ int calcularBaud(int pulsoUs, int protocolo)
 {
   if (protocolo < 1 || protocolo > 12)
     return 0;
+  if (pulsoUs <= 0)
+    return 0;   // evitar división por cero
   uint8_t mult = pgm_read_byte(&MULT_POR_PROTOCOLO[protocolo - 1]);
   return (int)(1000000L / ((long)mult * pulsoUs));
 }
@@ -279,12 +282,29 @@ void irASleep()
   // Apagar el ADC mientras duerme (ahorra batería)
   ADCSRA &= ~(1 << ADEN);
 
+  // Cerrar carrera: si el botón se apretó mientras se preparaba el sleep,
+  // el PCINT ya habría ocurrido y no despertaría. Mejor no dormir.
+  if (digitalRead(PIN_RESET) == LOW)
+  {
+    ADCSRA |= (1 << ADEN);
+    PCMSK2 &= ~(1 << PCINT22);
+    PCICR &= ~(1 << PCIE2);
+    u8g2.sleepOff();
+    EIFR |= (1 << INTF0);
+    sw433.enableReceive(0);
+    return;
+  }
+
+  // Desactivar el watchdog durante el sleep (si no, despierta cada 8 s)
+  wdt_disable();
+
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
   sleep_enable();
   sleep_cpu();      // queda dormido hasta que el botón genere la interrupción
   sleep_disable();
 
-  // Despertó: reactivar ADC
+  // Despertó: reactivar watchdog y ADC
+  wdt_enable(WDTO_8S);
   ADCSRA |= (1 << ADEN);
 
   // Limpiar interrupción del botón
@@ -338,22 +358,28 @@ void setup()
   sw433.enableReceive(0);
   ultimaActividad = millis();
   mostrarEspera();
+
+  // Watchdog: reinicia el micro si el loop se cuelga (>8 s sin wdt_reset)
+  wdt_enable(WDTO_8S);
 }
 
 void loop()
 {
-  // Botón reset con debounce (también cuenta como actividad)
-  if (digitalRead(PIN_RESET) == LOW)
+  wdt_reset();
+
+  // Botón reset por flanco de bajada (no bloquea el loop si queda presionado)
+  static bool botonPrevio = false;
+  bool botonAhora = (digitalRead(PIN_RESET) == LOW);
+  if (!botonPrevio && botonAhora)
   {
-    delay(50);
+    delay(50);   // debounce
     if (digitalRead(PIN_RESET) == LOW)
     {
       ultimaActividad = millis();
       resetearDetector();
-      while (digitalRead(PIN_RESET) == LOW)
-        ;
     }
   }
+  botonPrevio = botonAhora;
 
   // Autoapagado por inactividad: 2 min sin actividad -> sleep
   if (millis() - ultimaActividad > TIMEOUT_SLEEP)
