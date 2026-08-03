@@ -52,6 +52,8 @@ Ambas pantallas muestran la frecuencia detectada, el protocolo y la cantidad de 
 
 6. Apagar: deslizar el interruptor lateral a la posición OFF.
 
+**Autoapagado:** si pasan **2 minutos sin actividad** (ningún botón ni señal), el dispositivo entra solo en modo de reposo: la pantalla se apaga y el micro duerme. Apretar el botón lateral lo despierta y lo deja listo en la pantalla de espera.
+
 La batería es recargable — cargala mediante el puerto correspondiente cuando sea necesario.
 
 > ⚠️ La detección depende de la librería RCSwitch, que no cubre todos los protocolos existentes. Algunos controles pueden no ser reconocidos correctamente.
@@ -114,7 +116,7 @@ El gabinete está impreso en 3D y consta de 3 piezas:
 
 Esta es la **versión 1.0** del producto. Las siguientes mejoras están planificadas:
 
-- [ ] Autoapagado automático luego de 1 minuto 30 segundos de inactividad (sleep del microcontrolador)
+- [x] Autoapagado automático luego de 2 minutos de inactividad (sleep del microcontrolador)
 - [ ] Mejoras a la carcasa y diseño general
 - [ ] Soporte para detección de señales a **315MHz**
 - [ ] Diseño final en PCB dedicada para reducir costos y simplificar el ensamblado

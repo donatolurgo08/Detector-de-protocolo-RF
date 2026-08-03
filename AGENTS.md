@@ -25,13 +25,17 @@ En esta máquina ya está instalado `rc-switch` en `~/Arduino/libraries/`.
 ## Hardware (pines definidos en el código)
 
 - Recepción RF: `sw433.enableReceive(0)` → INT0 = pin **D2**.
-- Botón reset: pin **6**, `INPUT_PULLUP`, activo en LOW, con debounce de 50ms.
+- Botón reset: pin **6**, `INPUT_PULLUP`, activo en LOW, con debounce de 50ms. También despierta el micro desde el sleep (PCINT22, grupo PCINT2 en `irASleep()`).
 - Batería: **A0**, divisor 10k/4.7k, LiPo 2S (6.5–8.4V). Pct = `constrain((vBat-6.5)/(8.4-6.5)*100, 0, 100)`.
 - OLED por I2C por hardware (A4/A5). Debug por `Serial` a 9600.
 
 ## Lógica del detector
 
 Captura frames en `capturas[5]`. Con **3 tramas iguales** (comparación tolerante `mismaTrama`: admite ±1 bit de diferencia por glitches del receptor) → `COMPATIBLE` (código fijo). Si al llegar a 3 no coinciden pide reintento hasta **5** y decide por mayoría (`obtenerMayoria`, ≥3 iguales); si no hay mayoría → `NO COMPATIBLE` (rolling code). Además filtra por **bitrate**: `calcularBaud()` (1e6/(multProtocolo*pulsoUs)) debe caer en `BAUD_MIN..BAUD_MAX` (500–700), si no muestra `BITRATE NO SOPORTADO` y no cuenta el frame. RCSwitch devuelve `0` cuando falla la decodificación: ese paquete se descarta. `esperandoReset=true` congela el loop hasta que se apriete el botón.
+
+## Autoapagado
+
+Tras `TIMEOUT_SLEEP` (2 min) sin actividad (botón o frame recibido), `irASleep()` apaga el OLED (`u8g2.sleepOn()`), desactiva la recepción (`sw433.disableReceive()`) y entra en `SLEEP_MODE_PWR_DOWN`. Despierta por PCINT del botón (PD6=PCINT22): requiere el `ISR(PCINT2_vect)` (vacío) o el vector default hace reset del micro. Al despertar reactiva ADC, display y `enableReceive(0)`, y resetea a pantalla de espera. El módulo RX queda alimentado por hardware (no se corta desde firmware).
 
 ## Convenciones de estilo
 

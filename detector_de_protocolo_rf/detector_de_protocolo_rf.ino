@@ -1,6 +1,7 @@
 #include <RCSwitch.h>
 #include <U8g2lib.h>
 #include <Wire.h>
+#include <avr/sleep.h>
 #include "logo_bitech.h"
 
 // U8g2 en modo página de 128 bytes (vs 1024 de Adafruit)
@@ -17,6 +18,7 @@ const int MIN_IGUALES = 3;      // mínimo de tramas iguales para dar COMPATIBLE
 const int BAUD_MIN = 500;       // ventana de bitrate soportada (baud)
 const int BAUD_MAX = 700;
 const int RECEIVE_TOLERANCE = 50;  // % de tolerancia de RCSwitch (default 60)
+const unsigned long TIMEOUT_SLEEP = 120000UL;  // autoapagado por inactividad (2 min)
 
 // Multiplicador para pasar de pulso (µs) a bitrate: cantidad de pulsos por bit
 // según el protocolo de RCSwitch (índice = protocolo - 1)
@@ -36,6 +38,7 @@ int indice = 0;
 bool esperandoReset = false;
 bool reintentando = false;
 unsigned long ultimoAvisoBitrate = 0;
+unsigned long ultimaActividad = 0;
 
 // -----------------------------------------------------------
 
@@ -248,6 +251,57 @@ void procesarResultado(Paquete &ganador, bool esFijo)
 }
 
 // -----------------------------------------------------------
+// Autoapagado por inactividad
+
+// Interrupción de cambio de pin del botón (PD6 = PCINT22): solo se usa para
+// despertar el micro desde el sleep. El debounce lo sigue haciendo el loop.
+ISR(PCINT2_vect)
+{
+}
+
+void irASleep()
+{
+  // No dormir si el botón está presionado
+  if (digitalRead(PIN_RESET) == LOW)
+    return;
+
+  // Apagar la pantalla OLED
+  u8g2.sleepOn();
+
+  // Desactivar la recepción RF: durante el sleep solo despertará el botón
+  sw433.disableReceive();
+
+  // Habilitar interrupción por cambio de pin en el botón (grupo PORTD)
+  PCMSK2 |= (1 << PCINT22);
+  PCICR |= (1 << PCIE2);
+  PCIFR |= (1 << PCIF2);   // limpiar flags pendientes
+
+  // Apagar el ADC mientras duerme (ahorra batería)
+  ADCSRA &= ~(1 << ADEN);
+
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+  sleep_enable();
+  sleep_cpu();      // queda dormido hasta que el botón genere la interrupción
+  sleep_disable();
+
+  // Despertó: reactivar ADC
+  ADCSRA |= (1 << ADEN);
+
+  // Limpiar interrupción del botón
+  PCMSK2 &= ~(1 << PCINT22);
+  PCICR &= ~(1 << PCIE2);
+
+  // Reactivar display y recepción
+  u8g2.sleepOff();
+  EIFR |= (1 << INTF0);   // limpiar flag pendiente de INT0 antes de reactivar
+  sw433.enableReceive(0);
+
+  // Reiniciar a la pantalla de espera
+  ultimaActividad = millis();
+  resetearDetector();
+}
+
+// -----------------------------------------------------------
 
 void setup()
 {
@@ -282,21 +336,30 @@ void setup()
   u8g2.setFont(u8g2_font_6x10_tf);
   sw433.setReceiveTolerance(RECEIVE_TOLERANCE);
   sw433.enableReceive(0);
+  ultimaActividad = millis();
   mostrarEspera();
 }
 
 void loop()
 {
-  // reset button polling
+  // Botón reset con debounce (también cuenta como actividad)
   if (digitalRead(PIN_RESET) == LOW)
   {
     delay(50);
     if (digitalRead(PIN_RESET) == LOW)
     {
+      ultimaActividad = millis();
       resetearDetector();
       while (digitalRead(PIN_RESET) == LOW)
         ;
     }
+  }
+
+  // Autoapagado por inactividad: 2 min sin actividad -> sleep
+  if (millis() - ultimaActividad > TIMEOUT_SLEEP)
+  {
+    irASleep();
+    return;
   }
 
   if (esperandoReset)
@@ -304,6 +367,8 @@ void loop()
 
   if (sw433.available())
   {
+    ultimaActividad = millis();
+
     unsigned long cod = sw433.getReceivedValue();
     int proto = sw433.getReceivedProtocol();
     int bits = sw433.getReceivedBitlength();
