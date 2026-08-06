@@ -16,16 +16,12 @@ const int PIN_VBAT = A0;
 // ---- Constantes de detección ----
 const int MAX_CAPTURAS = 5;     // máximo de capturas antes de decidir
 const int MIN_IGUALES = 3;      // mínimo de tramas iguales para dar COMPATIBLE
-const int BAUD_MIN = 500;       // ventana de bitrate soportada (baud)
-const int BAUD_MAX = 700;
+const int BAUD_MIN = 400;       // ventana de bitrate soportada (baud)
+const int BAUD_MAX = 800;
 const int RECEIVE_TOLERANCE = 50;  // % de tolerancia de RCSwitch (default 60)
 const unsigned long TIMEOUT_SLEEP = 120000UL;  // autoapagado por inactividad (2 min)
 const int BATERIA_BAJA = 15;              // umbral de aviso de batería baja (%)
 const unsigned long INTERVALO_BATERIA = 1000UL;  // re-medir batería cada 1 s
-
-// Multiplicador para pasar de pulso (µs) a bitrate: cantidad de pulsos por bit
-// según el protocolo de RCSwitch (índice = protocolo - 1)
-static const uint8_t PROGMEM MULT_POR_PROTOCOLO[] = { 4, 3, 15, 4, 3, 3, 7, 23, 23, 4, 3, 3 };
 
 // ---- Struct de paquete ----
 struct Paquete
@@ -34,6 +30,7 @@ struct Paquete
   int protocolo;
   int bits;
   int pulso;
+  int baud;
 };
 
 Paquete capturas[MAX_CAPTURAS];
@@ -83,152 +80,40 @@ int medirBateria()
   return bateriaCached;
 }
 
-// Bitrate (baud) a partir del pulso medido por RCSwitch y el protocolo.
-// baud = 1e6 / (pulsosPorBit * pulsoUs)
-int calcularBaud(int pulsoUs, int protocolo)
+// Bitrate (baud) medido directamente de los timings capturados por RCSwitch.
+// Suma la duración de TODA la trama (sync + todos los bits) y calcula:
+// baud = 1e6 * bits / sumaTrama   (bits por segundo, escala porque suma está en µs)
+//
+// El buffer de timings es de tamaño fijo (RCSWITCH_MAX_CHANGES) y la librería
+// no expone cuántos samples escribió: la longitud usada se deriva del bitlength
+// (1 sample de sync + 2 por bit = 2*bits + 1). El sync está en el índice 0,
+// por eso la suma arranca ahí: la tasa incluye el sync, como la mide el aparato.
+int calcularBaud(int bits, int protocolo)
 {
-  if (protocolo < 1 || protocolo > 12)
+  if (bits <= 0)
     return 0;
-  if (pulsoUs <= 0)
-    return 0;   // evitar división por cero
-  uint8_t mult = pgm_read_byte(&MULT_POR_PROTOCOLO[protocolo - 1]);
-  return (int)(1000000L / ((long)mult * pulsoUs));
-}
 
-// Dibuja cabecera: batería + línea separadora
-// U8g2 trabaja dentro de firstPage/nextPage, no necesita clearDisplay
-void dibujarCabecera(int bat)
-{
-  bool bateriaBaja = (bat < BATERIA_BAJA);
-  // En batería baja el ícono parpadea (se dibuja solo en el medio ciclo par)
-  bool iconoVisible = !bateriaBaja || ((millis() / 500) % 2 == 0);
+  unsigned int* timings = sw433.getReceivedRawdata();
 
-  // Texto batería
-  u8g2.setCursor(0, 8);
-  u8g2.print(F("BAT:"));
-  u8g2.print(bat);
-  u8g2.print('%');
-  if (bateriaBaja)
-    u8g2.print('!');
+  unsigned long sumaBits = 0;
+  int n = 2 * bits + 1;                 // 1 sync + 2 flancos por cada bit
+  if (n >= RCSWITCH_MAX_CHANGES)        // no salirse del buffer real
+    n = RCSWITCH_MAX_CHANGES - 1;
 
-  // Ícono batería (esquina superior derecha)
-  u8g2.drawFrame(106, 1, 18, 7);
-  u8g2.drawBox(124, 3, 2, 3);
-  if (iconoVisible)
-  {
-    int ancho = (int)(14.0 * bat / 100.0);
-    if (ancho > 0)
-      u8g2.drawBox(107, 2, ancho, 5);
-  }
+  int inicio = 0;
+  // Protocolo 4: sync corto (< 4300 µs) que no dispara el reinicio de captura
+  // de RCSwitch, así que el índice 0 es el reposo entre tramas y no el sync.
+  // Se descarta para no inflar la duración de la trama.
+  if (protocolo == 4)
+    inicio = 1;
 
-  // Línea separadora
-  u8g2.drawHLine(0, 11, 128);
-}
+  for (int i = inicio; i <= n; i++)
+    sumaBits += timings[i];             // i=inicio: el sync está al principio
 
-// -----------------------------------------------------------
+  if (sumaBits == 0)
+    return 0;                           // evitar división por cero
 
-void mostrarEspera()
-{
-  int bat = medirBateria();
-  u8g2.firstPage();
-  do
-  {
-    dibujarCabecera(bat);
-    u8g2.setCursor(0, 23);
-    u8g2.print(F("Apriete el control"));
-    u8g2.setCursor(0, 33);
-    u8g2.print(F("del porton 3 veces"));
-    u8g2.setCursor(0, 47);
-    u8g2.print(F("Detectados: "));
-    if (reintentando)
-    {
-      u8g2.print(indice);
-      u8g2.print(F("/5"));
-    }
-    else
-    {
-      u8g2.print(min(indice, 3));
-      u8g2.print(F("/3"));
-    }
-    u8g2.setCursor(0, 57);
-    if (reintentando)
-      u8g2.print(F("No coinciden, repita"));
-    else
-      u8g2.print(F("433 MHz activo"));
-  } while (u8g2.nextPage());
-}
-
-void mostrarCompatible(Paquete &p)
-{
-  int bat = medirBateria();
-  u8g2.firstPage();
-  do
-  {
-    dibujarCabecera(bat);
-    u8g2.setCursor(0, 22);
-    u8g2.print(F("COMPATIBLE"));
-    u8g2.drawHLine(0, 24, 128);
-    u8g2.setCursor(0, 34);
-    u8g2.print(F("Baud:"));
-    u8g2.print(calcularBaud(p.pulso, p.protocolo));
-    u8g2.setCursor(0, 43);
-    u8g2.print(F("Proto:"));
-    u8g2.print(p.protocolo);
-    u8g2.setCursor(0, 52);
-    u8g2.print(F("Bits:"));
-    u8g2.print(p.bits);
-    u8g2.setCursor(0, 61);
-    u8g2.print(F("Cod:"));
-    u8g2.print(p.codigo);
-  } while (u8g2.nextPage());
-}
-
-void mostrarIncompatible(Paquete &p)
-{
-  int bat = medirBateria();
-  u8g2.firstPage();
-  do
-  {
-    dibujarCabecera(bat);
-    u8g2.setCursor(0, 22);
-    u8g2.print(F("NO COMPATIBLE"));
-    u8g2.drawHLine(0, 24, 128);
-    u8g2.setCursor(0, 34);
-    u8g2.print(F("Rolling Code"));
-    u8g2.setCursor(0, 43);
-    u8g2.print(F("Baud:"));
-    u8g2.print(calcularBaud(p.pulso, p.protocolo));
-    u8g2.setCursor(0, 52);
-    u8g2.print(F("Proto:"));
-    u8g2.print(p.protocolo);
-    u8g2.setCursor(0, 61);
-    u8g2.print(F("Bits:"));
-    u8g2.print(p.bits);
-  } while (u8g2.nextPage());
-}
-
-void mostrarBitrateNoSoportado(int baud, int pulso)
-{
-  int bat = medirBateria();
-  u8g2.firstPage();
-  do
-  {
-    dibujarCabecera(bat);
-    u8g2.setCursor(0, 22);
-    u8g2.print(F("BITRATE NO SOPORTADO"));
-    u8g2.drawHLine(0, 24, 128);
-    u8g2.setCursor(0, 34);
-    u8g2.print(F("Baud:"));
-    u8g2.print(baud);
-    u8g2.setCursor(0, 43);
-    u8g2.print(F("Pulso:"));
-    u8g2.print(pulso);
-    u8g2.print(F(" us"));
-    u8g2.setCursor(0, 52);
-    u8g2.print(F("Solo 500-700 baud"));
-  } while (u8g2.nextPage());
-  delay(2500);
-  mostrarEspera();
+  return (int)(1000000L * bits / sumaBits);
 }
 
 // -----------------------------------------------------------
@@ -240,7 +125,7 @@ void resetearDetector()
   reintentando = false;
   ultimoAvisoBitrate = 0;
   for (int i = 0; i < MAX_CAPTURAS; i++)
-    capturas[i] = {0, 0, 0, 0};
+    capturas[i] = {0, 0, 0, 0, 0};
   sw433.resetAvailable();
   mostrarEspera();
 }
@@ -447,12 +332,13 @@ void loop()
     int proto = sw433.getReceivedProtocol();
     int bits = sw433.getReceivedBitlength();
     int pulso = sw433.getReceivedDelay();
+    // El baud se mide sobre los timings crudos: calcularlo mientras están
+    // frescos (antes de resetAvailable()).
+    int baud = calcularBaud(bits, proto);
     sw433.resetAvailable();
 
     if (cod == 0)
       return;
-
-    int baud = calcularBaud(pulso, proto);
 
     Serial.print(F("["));
     Serial.print(indice + 1);
@@ -477,7 +363,7 @@ void loop()
       return;
     }
 
-    capturas[indice] = {cod, proto, bits, pulso};
+    capturas[indice] = {cod, proto, bits, pulso, baud};
     indice++;
 
     if (indice >= MIN_IGUALES)
