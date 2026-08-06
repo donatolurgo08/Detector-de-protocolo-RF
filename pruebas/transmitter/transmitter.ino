@@ -13,8 +13,10 @@
 //          Usa la resistencia pull-up interna, no hace falta resistencias.
 //          Cada pulsacion envia 1 frame (como apretar 1 vez el control).
 //
-// Comandos por Serial (a 9600), un caracter por accion:
-//   1..6     preset codigo fijo (COMPATIBLE)
+// Comandos por Serial (a 9600):
+//   1..12    preset codigo fijo con ese protocolo RCSwitch (COMPATIBLE)
+//           (8 y 9 son muy lentos -> el detector mostrara BITRATE NO
+//            SOPORTADO, es el resultado esperado)
 //   r        rolling code (NO COMPATIBLE)
 //   l|f      bitrate fuera de rango (lento/rapido)
 //   e        envia 1 frame del ultimo codigo
@@ -22,7 +24,6 @@
 //   m        muestra este menu
 //   send <codigo> <bits> <proto> [pulso]   envia un frame (opcional)
 //   rep <n>                                repite el ultimo frame n veces
-//   help                                    muestra este menu
 //
 // Notas sobre el detector:
 //   - Solo cuenta tramas de 400 a 800 baud; fuera -> BITRATE NO SOPORTADO.
@@ -49,7 +50,8 @@ void mostrarMenu()
 {
   Serial.println();
   Serial.println(F("==== GENERADOR RF 433 MHz (ESP32) ===="));
-  Serial.println(F("1..6  preset codigo fijo (COMPATIBLE)"));
+  Serial.println(F("1..12 preset codigo fijo del protocolo"));
+  Serial.println(F("       (8 y 9: BITRATE NO SOPORTADO esperado)"));
   Serial.println(F("r     rolling code (NO COMPATIBLE)"));
   Serial.println(F("l|f   bitrate fuera de rango (lento|rapido)"));
   Serial.println(F("e     envia 1 frame del ultimo codigo"));
@@ -196,6 +198,63 @@ void ejecutarPreset(const char *nombre)
     ultimoPulso = 0;
     repetirUltimo(3);
   }
+  else if (strcmp(nombre, "p7") == 0)
+  {
+    // proto7 (HS2303-PT), 24 bits, ~690 baud -> COMPATIBLE
+    ultimoCodigo = 0x123456;
+    ultimoBits = 24;
+    ultimoProto = 7;
+    ultimoPulso = 0;
+    repetirUltimo(3);
+  }
+  else if (strcmp(nombre, "p8") == 0)
+  {
+    // proto8 (Conrad RS-200 RX): pulso 200us, ~175 baud. Es un protocolo
+    // muy lento (max ~217 baud): el detector mostrara BITRATE NO SOPORTADO.
+    ultimoCodigo = 0x234567;
+    ultimoBits = 24;
+    ultimoProto = 8;
+    ultimoPulso = 0;
+    repetirUltimo(3);
+  }
+  else if (strcmp(nombre, "p9") == 0)
+  {
+    // proto9 (Conrad RS-200 TX, invertido): ~174 baud, igual de lento que 8.
+    // Resultado esperado: BITRATE NO SOPORTADO.
+    ultimoCodigo = 0x345678;
+    ultimoBits = 24;
+    ultimoProto = 9;
+    ultimoPulso = 0;
+    repetirUltimo(3);
+  }
+  else if (strcmp(nombre, "p10") == 0)
+  {
+    // proto10 (1ByOne Doorbell, invertido), 24 bits, ~572 baud -> COMPATIBLE
+    ultimoCodigo = 0x456789;
+    ultimoBits = 24;
+    ultimoProto = 10;
+    ultimoPulso = 0;
+    repetirUltimo(3);
+  }
+  else if (strcmp(nombre, "p11") == 0)
+  {
+    // proto11 (HT12E, invertido), 16 bits, ~697 baud -> COMPATIBLE.
+    // Con 24 bits daba ~815 baud (sobre el maximo), por eso 16 bits.
+    ultimoCodigo = 0xBEEF;
+    ultimoBits = 16;
+    ultimoProto = 11;
+    ultimoPulso = 0;
+    repetirUltimo(3);
+  }
+  else if (strcmp(nombre, "p12") == 0)
+  {
+    // proto12 (SM5212, invertido), 24 bits, ~688 baud -> COMPATIBLE
+    ultimoCodigo = 0x789ABC;
+    ultimoBits = 24;
+    ultimoProto = 12;
+    ultimoPulso = 0;
+    repetirUltimo(3);
+  }
   else if (strcmp(nombre, "roll") == 0)
   {
     // Rolling code: el codigo cambia en cada envio -> NO COMPATIBLE
@@ -279,10 +338,13 @@ void procesarComando(char *linea)
     return;
   }
 
-  // Presets de codigo fijo: 1..6 -> p1..p6
-  if (c >= '1' && c <= '6')
+  // Presets de codigo fijo: 1..12 -> p1..p12 (se usa atoi para aceptar
+  // "10", "11" y "12", no solo un caracter).
+  int nPreset = atoi(cmd);
+  if (nPreset >= 1 && nPreset <= 12)
   {
-    char preset[3] = {'p', c, '\0'};
+    char preset[4];
+    snprintf(preset, sizeof(preset), "p%d", nPreset);
     ejecutarPreset(preset);
     return;
   }
