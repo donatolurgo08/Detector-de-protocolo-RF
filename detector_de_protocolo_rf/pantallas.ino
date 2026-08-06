@@ -66,7 +66,10 @@ void mostrarEspera()
   } while (u8g2.nextPage());
 }
 
-void mostrarCompatible(Paquete &p)
+// Vista genérica de la resultado: mismo layout en todas las vistas, asterisco
+// en el campo que señala el problema (titulo viene en flash con F()).
+void dibujarResultado(const __FlashStringHelper* titulo, Paquete &p,
+                      bool asteriscoBps, bool asteriscoProto)
 {
   int bat = medirBateria();
   u8g2.firstPage();
@@ -74,14 +77,25 @@ void mostrarCompatible(Paquete &p)
   {
     dibujarCabecera(bat);
     u8g2.setCursor(0, 22);
-    u8g2.print(F("COMPATIBLE"));
+    u8g2.print(titulo);
     u8g2.drawHLine(0, 24, 128);
     u8g2.setCursor(0, 34);
-    u8g2.print(F("Baud:"));
+    u8g2.print(F("BPS:"));
     u8g2.print(p.baud);
+    if (asteriscoBps)
+    {
+      u8g2.print(F(" ("));
+      u8g2.print(BAUD_MIN);
+      u8g2.print('-');
+      u8g2.print(BAUD_MAX);
+      u8g2.print(')');
+      u8g2.print(F(" X"));
+    }
     u8g2.setCursor(0, 43);
-    u8g2.print(F("Proto:"));
+    u8g2.print(F("Protocolo:"));
     u8g2.print(p.protocolo);
+    if (asteriscoProto)
+      u8g2.print(F(" X"));
     u8g2.setCursor(0, 52);
     u8g2.print(F("Bits:"));
     u8g2.print(p.bits);
@@ -91,7 +105,30 @@ void mostrarCompatible(Paquete &p)
   } while (u8g2.nextPage());
 }
 
-void mostrarIncompatible(Paquete &p)
+void mostrarCompatible(Paquete &p)
+{
+  dibujarResultado(F("COMPATIBLE"), p, false, false);
+}
+
+void mostrarProbCompatible(Paquete &p)
+{
+  dibujarResultado(F("PROB. COMPATIBLE"), p, false, true);
+}
+
+// Protocolo sin compatibilidad documentada con RS400TX: asterisco en Protocolo.
+void mostrarNoCompatible(Paquete &p)
+{
+  dibujarResultado(F("NO COMPATIBLE"), p, false, true);
+}
+
+// Bitrate fuera de la ventana: asterisco en BPS con el rango actual.
+void mostrarNoCompatibleBps(Paquete &p)
+{
+  dibujarResultado(F("NO COMPATIBLE"), p, true, false);
+}
+
+// Rolling code: solo el texto, centrado.
+void mostrarRollingCode()
 {
   int bat = medirBateria();
   u8g2.firstPage();
@@ -101,40 +138,8 @@ void mostrarIncompatible(Paquete &p)
     u8g2.setCursor(0, 22);
     u8g2.print(F("NO COMPATIBLE"));
     u8g2.drawHLine(0, 24, 128);
-    u8g2.setCursor(0, 34);
-    u8g2.print(F("Rolling Code"));
-    u8g2.setCursor(0, 43);
-    u8g2.print(F("Baud:"));
-    u8g2.print(p.baud);
-    u8g2.setCursor(0, 52);
-    u8g2.print(F("Proto:"));
-    u8g2.print(p.protocolo);
-    u8g2.setCursor(0, 61);
-    u8g2.print(F("Bits:"));
-    u8g2.print(p.bits);
+    // "ROLLING CODE" = 12 chars x 6px = 72px -> x = (128-72)/2 = 28
+    u8g2.setCursor(28, 43);
+    u8g2.print(F("ROLLING CODE"));
   } while (u8g2.nextPage());
-}
-
-void mostrarBitrateNoSoportado(int baud, int pulso)
-{
-  int bat = medirBateria();
-  u8g2.firstPage();
-  do
-  {
-    dibujarCabecera(bat);
-    u8g2.setCursor(0, 22);
-    u8g2.print(F("BITRATE NO SOPORTADO"));
-    u8g2.drawHLine(0, 24, 128);
-    u8g2.setCursor(0, 34);
-    u8g2.print(F("Baud:"));
-    u8g2.print(baud);
-    u8g2.setCursor(0, 43);
-    u8g2.print(F("Pulso:"));
-    u8g2.print(pulso);
-    u8g2.print(F(" us"));
-    u8g2.setCursor(0, 52);
-    u8g2.print(F("Solo 400-800 baud"));
-  } while (u8g2.nextPage());
-  delay(2500);
-  mostrarEspera();
 }

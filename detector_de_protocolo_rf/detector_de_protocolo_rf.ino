@@ -37,7 +37,6 @@ Paquete capturas[MAX_CAPTURAS];
 int indice = 0;
 bool esperandoReset = false;
 bool reintentando = false;
-unsigned long ultimoAvisoBitrate = 0;
 unsigned long ultimaActividad = 0;
 unsigned long ultimaMedicionBateria = 0;
 int bateriaCached = -1;   // -1 = aún sin medir
@@ -123,7 +122,6 @@ void resetearDetector()
   indice = 0;
   esperandoReset = false;
   reintentando = false;
-  ultimoAvisoBitrate = 0;
   for (int i = 0; i < MAX_CAPTURAS; i++)
     capturas[i] = {0, 0, 0, 0, 0};
   sw433.resetAvailable();
@@ -175,14 +173,46 @@ bool obtenerMayoria(Paquete &ganador)
   return false;
 }
 
+// Compatibilidad del protocolo con el receptor RS400TX:
+//   2 = confirmado, 1 = probable, 0 = no compatible
+int compatibilidadProtocolo(int protocolo)
+{
+  switch (protocolo)
+  {
+    case 6:                                  // HT6P20B: confirmado
+      return 2;
+    case 1: case 2: case 4: case 5:          // PT2262 genérico y otros
+    case 11: case 12:                        // HT12E, SM5212: probables
+      return 1;
+    default:                                 // 3, 7, 8, 9, 10: no
+      return 0;
+  }
+}
+
 void procesarResultado(Paquete &ganador, bool esFijo)
 {
   esperandoReset = true;
 
-  if (esFijo)
+  // Prioridad en condiciones de carrera: rolling code > bps > protocolo
+  if (!esFijo)
+  {
+    mostrarRollingCode();
+    return;
+  }
+
+  if (ganador.baud < BAUD_MIN || ganador.baud > BAUD_MAX)
+  {
+    mostrarNoCompatibleBps(ganador);
+    return;
+  }
+
+  int compat = compatibilidadProtocolo(ganador.protocolo);
+  if (compat == 2)
     mostrarCompatible(ganador);
+  else if (compat == 1)
+    mostrarProbCompatible(ganador);
   else
-    mostrarIncompatible(ganador);
+    mostrarNoCompatible(ganador);
 }
 
 // -----------------------------------------------------------
@@ -352,16 +382,6 @@ void loop()
     Serial.print(pulso);
     Serial.print(F(" baud:"));
     Serial.println(baud);
-
-    if (baud < BAUD_MIN || baud > BAUD_MAX)
-    {
-      if (millis() - ultimoAvisoBitrate > 3000)
-      {
-        ultimoAvisoBitrate = millis();
-        mostrarBitrateNoSoportado(baud, pulso);
-      }
-      return;
-    }
 
     capturas[indice] = {cod, proto, bits, pulso, baud};
     indice++;
