@@ -79,40 +79,59 @@ int medirBateria()
   return bateriaCached;
 }
 
-// Bitrate (baud) medido directamente de los timings capturados por RCSwitch.
-// Suma la duración de TODA la trama (sync + todos los bits) y calcula:
-// baud = 1e6 * bits / sumaTrama   (bits por segundo, escala porque suma está en µs)
-//
-// El buffer de timings es de tamaño fijo (RCSWITCH_MAX_CHANGES) y la librería
-// no expone cuántos samples escribió: la longitud usada se deriva del bitlength
-// (1 sample de sync + 2 por bit = 2*bits + 1). El sync está en el índice 0,
-// por eso la suma arranca ahí: la tasa incluye el sync, como la mide el aparato.
-int calcularBaud(int bits, int protocolo)
+// Factores de pulso por protocolo RCSwitch (sync, zero, one), en PROGMEM.
+// La duración de la trama se deriva de estos y del pulso medido, sin depender
+// del buffer crudo de timings (que el ISR sigue sobrescribiendo).
+struct FactoresProto
 {
-  if (bits <= 0)
+  uint8_t syncH, syncL;
+  uint8_t zeroH, zeroL;
+  uint8_t oneH, oneL;
+};
+
+static const FactoresProto PROGMEM factoresProto[12] = {
+  {  1, 31,  1,  3,  3,  1 },   // 1
+  {  1, 10,  1,  2,  2,  1 },   // 2
+  { 30, 71,  4, 11,  9,  6 },   // 3
+  {  1,  6,  1,  3,  3,  1 },   // 4
+  {  6, 14,  1,  2,  2,  1 },   // 5
+  { 23,  1,  1,  2,  2,  1 },   // 6
+  {  2, 62,  1,  6,  6,  1 },   // 7
+  {  3,130,  7, 16,  3, 16 },   // 8
+  {130,  7, 16,  7, 16,  3 },   // 9
+  { 18,  1,  3,  1,  1,  3 },   // 10
+  { 36,  1,  1,  2,  2,  1 },   // 11
+  { 36,  1,  1,  2,  2,  1 },   // 12
+};
+
+// Bitrate (baud) promedio sobre la trama completa (sync + todos los bits).
+// Determinístico: se calcula de los valores ya decodificados por RCSwitch
+// (pulso, bits, código y protocolo), no del buffer crudo. Así una misma señal
+// siempre da la misma baud (el buffer live variaba con el micro-timing de la
+// lectura, dando dos bauds distintos para el mismo envío).
+// baud = 1e6 * bits / (pulso * (suma de factores de cada bit + sync))
+int calcularBaud(unsigned long codigo, int bits, int protocolo, int pulso)
+{
+  if (bits <= 0 || pulso <= 0 || protocolo < 1 || protocolo > 12)
     return 0;
 
-  unsigned int* timings = sw433.getReceivedRawdata();
+  FactoresProto f;
+  memcpy_P(&f, &factoresProto[protocolo - 1], sizeof(FactoresProto));
 
-  unsigned long sumaBits = 0;
-  int n = 2 * bits + 1;                 // 1 sync + 2 flancos por cada bit
-  if (n >= RCSWITCH_MAX_CHANGES)        // no salirse del buffer real
-    n = RCSWITCH_MAX_CHANGES - 1;
+  unsigned long sumaFactor = f.syncH + f.syncL;   // el sync forma parte de la trama
+  for (int i = bits - 1; i >= 0; i--)
+  {
+    if (codigo & (1UL << i))
+      sumaFactor += f.oneH + f.oneL;
+    else
+      sumaFactor += f.zeroH + f.zeroL;
+  }
 
-  int inicio = 0;
-  // Protocolo 4: sync corto (< 4300 µs) que no dispara el reinicio de captura
-  // de RCSwitch, así que el índice 0 es el reposo entre tramas y no el sync.
-  // Se descarta para no inflar la duración de la trama.
-  if (protocolo == 4)
-    inicio = 1;
-
-  for (int i = inicio; i <= n; i++)
-    sumaBits += timings[i];             // i=inicio: el sync está al principio
-
-  if (sumaBits == 0)
+  unsigned long sumaUs = (unsigned long)pulso * sumaFactor;
+  if (sumaUs == 0)
     return 0;                           // evitar división por cero
 
-  return (int)(1000000L * bits / sumaBits);
+  return (int)(1000000UL * bits / sumaUs);
 }
 
 // -----------------------------------------------------------
@@ -362,9 +381,9 @@ void loop()
     int proto = sw433.getReceivedProtocol();
     int bits = sw433.getReceivedBitlength();
     int pulso = sw433.getReceivedDelay();
-    // El baud se mide sobre los timings crudos: calcularlo mientras están
-    // frescos (antes de resetAvailable()).
-    int baud = calcularBaud(bits, proto);
+    // El baud se calcula de los valores decodificados (snapshots de RCSwitch),
+    // no del buffer crudo, que el ISR sigue sobrescribiendo.
+    int baud = calcularBaud(cod, bits, proto, pulso);
     sw433.resetAvailable();
 
     if (cod == 0)

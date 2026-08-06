@@ -15,7 +15,7 @@ void dibujarCabecera(int bat)
 
   // Texto batería
   u8g2.setCursor(0, 8);
-  u8g2.print(F("BAT:"));
+  u8g2.print(F("BAT: "));
   u8g2.print(bat);
   u8g2.print('%');
   if (bateriaBaja)
@@ -80,7 +80,7 @@ void dibujarResultado(const __FlashStringHelper* titulo, Paquete &p,
     u8g2.print(titulo);
     u8g2.drawHLine(0, 24, 128);
     u8g2.setCursor(0, 34);
-    u8g2.print(F("BPS:"));
+    u8g2.print(F("BPS: "));
     u8g2.print(p.baud);
     if (asteriscoBps)
     {
@@ -92,15 +92,15 @@ void dibujarResultado(const __FlashStringHelper* titulo, Paquete &p,
       u8g2.print(F(" X"));
     }
     u8g2.setCursor(0, 43);
-    u8g2.print(F("Protocolo:"));
+    u8g2.print(F("Protocolo: "));
     u8g2.print(p.protocolo);
     if (asteriscoProto)
       u8g2.print(F(" X"));
     u8g2.setCursor(0, 52);
-    u8g2.print(F("Bits:"));
+    u8g2.print(F("Bits: "));
     u8g2.print(p.bits);
     u8g2.setCursor(0, 61);
-    u8g2.print(F("Cod:"));
+    u8g2.print(F("Cod: "));
     u8g2.print(p.codigo);
   } while (u8g2.nextPage());
 }
