@@ -11,7 +11,6 @@ U8G2_SSD1306_128X64_NONAME_2_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 RCSwitch sw433 = RCSwitch();
 
 const int PIN_RESET = 6;
-const int PIN_VBAT = A0;
 
 // ---- Constantes de detección ----
 const int MAX_CAPTURAS = 5;     // máximo de capturas antes de decidir
@@ -20,8 +19,6 @@ const int BAUD_MIN = 400;       // ventana de bitrate soportada (baud)
 const int BAUD_MAX = 800;
 const int RECEIVE_TOLERANCE = 50;  // % de tolerancia de RCSwitch (default 60)
 const unsigned long TIMEOUT_SLEEP = 120000UL;  // autoapagado por inactividad (2 min)
-const int BATERIA_BAJA = 15;              // umbral de aviso de batería baja (%)
-const unsigned long INTERVALO_BATERIA = 1000UL;  // re-medir batería cada 1 s
 
 // ---- Struct de paquete ----
 struct Paquete
@@ -38,46 +35,8 @@ int indice = 0;
 bool esperandoReset = false;
 bool reintentando = false;
 unsigned long ultimaActividad = 0;
-unsigned long ultimaMedicionBateria = 0;
-int bateriaCached = -1;   // -1 = aún sin medir
 
 // -----------------------------------------------------------
-
-// Mide VCC en mV usando el bandgap interno de 1.1V como referencia.
-// Así la lectura de batería no depende de que VCC sea exactamente 5V.
-long leerVcc()
-{
-  ADMUX = (1 << REFS0) | (1 << MUX3) | (1 << MUX2) | (1 << MUX1);
-  delay(2);
-  ADCSRA |= (1 << ADSC);
-  while (bit_is_set(ADCSRA, ADSC))
-    ;
-  uint8_t bajo = ADCL;
-  uint8_t alto = ADCH;
-  return 1125300L / ((alto << 8) | bajo);
-}
-
-// Porcentaje de batería: promedio de lecturas, con caché de 1 s.
-// pct = (vBat - 6.5V) / (8.4V - 6.5V) * 100, con divisor 10k/4.7k.
-int medirBateria()
-{
-  if (millis() - ultimaMedicionBateria < INTERVALO_BATERIA && bateriaCached >= 0)
-    return bateriaCached;
-  ultimaMedicionBateria = millis();
-
-  long suma = 0;
-  for (int i = 0; i < 8; i++)
-    suma += analogRead(PIN_VBAT);
-  int raw = (int)(suma / 8);
-
-  long vcc = leerVcc();                          // mV
-  long vBat = raw * vcc * 147L / (1023L * 47L);  // divisor 10k/4.7k
-  long pct = (vBat - 6500L) * 100L / (8400L - 6500L);
-  pct = constrain(pct, 0, 100);
-
-  bateriaCached = (int)pct;
-  return bateriaCached;
-}
 
 // Factores de pulso por protocolo RCSwitch (sync, zero, one), en PROGMEM.
 // La duración de la trama se deriva de estos y del pulso medido, sin depender
@@ -297,9 +256,8 @@ void irASleep()
   EIFR |= (1 << INTF0);   // limpiar flag pendiente de INT0 antes de reactivar
   sw433.enableReceive(0);
 
-  // Reiniciar a la pantalla de espera (re-mide la batería al despertar)
+  // Reiniciar a la pantalla de espera (la batería se re-mide sola en cada marco)
   ultimaActividad = millis();
-  ultimaMedicionBateria = 0;
   resetearDetector();
 }
 
@@ -320,7 +278,7 @@ void setup()
     u8g2.drawXBMP(0, 0, LOGO_W, LOGO_H, logo_bitech);
   } while (u8g2.nextPage());
 
-  delay(2500);
+  delay(1300);
 
   // titulo
   u8g2.firstPage();
@@ -334,7 +292,7 @@ void setup()
     u8g2.print(F("433 MHz"));
   } while (u8g2.nextPage());
 
-  delay(2500);
+  delay(1300);
   u8g2.setFont(u8g2_font_6x10_tf);
   sw433.setReceiveTolerance(RECEIVE_TOLERANCE);
   sw433.enableReceive(0);
