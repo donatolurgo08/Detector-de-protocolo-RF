@@ -68,7 +68,7 @@ void mostrarMenu()
 // con setProtocol()/setPulseLength() antes de enviar.
 void enviarFrame(unsigned long codigo, int bits, int proto, int pulso)
 {
-  if (proto >= 1 && proto <= 6)
+  if (proto >= 1 && proto <= 12)
   {
     if (pulso > 0)
       sw433.setProtocol(proto, pulso);   // protocolo con pulso custom (us)
