@@ -117,9 +117,9 @@ El gabinete está impreso en 3D y consta de 3 piezas:
 Esta es la **versión 1.0** del producto. Las siguientes mejoras están planificadas:
 
 - [x] Autoapagado automático luego de 2 minutos de inactividad (sleep del microcontrolador)
-- [ ] Mejoras a la carcasa y diseño general
-- [ ] Soporte para detección de señales a **315MHz**
-- [ ] Diseño final en PCB dedicada para reducir costos y simplificar el ensamblado
+- [x] Mejoras a la carcasa y diseño general
+- [x] Soporte para detección de señales a **315MHz**
+- [x] Diseño final en PCB dedicada para reducir costos y simplificar el ensamblado
 
 ---
 
